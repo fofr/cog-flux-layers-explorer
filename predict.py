@@ -4,7 +4,6 @@
 import os
 import mimetypes
 import json
-import shutil
 from typing import List
 from cog import BasePredictor, Input, Path
 from comfyui import ComfyUI
@@ -26,12 +25,26 @@ os.environ["HF_DATASETS_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
+ASPECT_RATIOS = {
+    "1:1": (1024, 1024),
+    "16:9": (1344, 768),
+    "21:9": (1536, 640),
+    "3:2": (1216, 832),
+    "2:3": (832, 1216),
+    "4:5": (896, 1088),
+    "5:4": (1088, 896),
+    "3:4": (896, 1152),
+    "4:3": (1152, 896),
+    "9:16": (768, 1344),
+    "9:21": (640, 1536),
+}
+
+
 class Predictor(BasePredictor):
     def setup(self):
         self.comfyUI = ComfyUI("127.0.0.1:8188")
         self.comfyUI.start_server(OUTPUT_DIR, INPUT_DIR)
 
-        # Give a list of weights filenames to download during setup
         with open(api_json_file, "r") as file:
             workflow = json.loads(file.read())
         self.comfyUI.handle_weights(
@@ -39,43 +52,74 @@ class Predictor(BasePredictor):
             weights_to_download=[],
         )
 
-    def filename_with_extension(self, input_file, prefix):
-        extension = os.path.splitext(input_file.name)[1]
-        return f"{prefix}{extension}"
+    def width_height_from_aspect_ratio(self, aspect_ratio):
+        return ASPECT_RATIOS[aspect_ratio]
 
-    def handle_input_file(
-        self,
-        input_file: Path,
-        filename: str = "image.png",
-    ):
-        shutil.copy(input_file, os.path.join(INPUT_DIR, filename))
-
-    # Update nodes in the JSON workflow to modify your workflow based on the given inputs
     def update_workflow(self, workflow, **kwargs):
-        # Below is an example showing how to get the node you need and update the inputs
+        width, height = self.width_height_from_aspect_ratio(kwargs["aspect_ratio"])
 
-        # positive_prompt = workflow["6"]["inputs"]
-        # positive_prompt["text"] = kwargs["prompt"]
+        positive_prompt = workflow["6"]["inputs"]
+        positive_prompt["text"] = kwargs["prompt"]
 
-        # negative_prompt = workflow["7"]["inputs"]
-        # negative_prompt["text"] = f"nsfw, {kwargs['negative_prompt']}"
+        empty_latent_image = workflow["5"]["inputs"]
+        empty_latent_image["width"] = width
+        empty_latent_image["height"] = height
+        empty_latent_image["batch_size"] = kwargs["num_outputs"]
 
-        # sampler = workflow["3"]["inputs"]
-        # sampler["seed"] = kwargs["seed"]
-        pass
+        shift = workflow["61"]["inputs"]
+        shift["width"] = width
+        shift["height"] = height
+        shift["max_shift"] = kwargs["max_shift"]
+        shift["base_shift"] = kwargs["base_shift"]
+
+        workflow["17"]["inputs"]["steps"] = kwargs["num_inference_steps"]
+        workflow["25"]["inputs"]["noise_seed"] = kwargs["seed"]
+        workflow["60"]["inputs"]["guidance"] = kwargs["guidance_scale"]
+        workflow["99"]["inputs"]["blocks"] = kwargs["flux_layers_to_patch"]
 
     def predict(
         self,
         prompt: str = Input(
-            default="",
+            description="Prompt for generated image. If you include the `trigger_word` used in the training process you are more likely to activate the trained object, style, or concept in the resulting image."
         ),
-        negative_prompt: str = Input(
-            description="Things you do not want to see in your image",
-            default="",
+        flux_layers_to_patch: str = Input(
+            description="Flux Dev layers to patch. A new line separated list of layers with values or a regular expression matching multiple layers, for example: 'double_blocks.0.img_mod.lin.weight=1.01' or 'double_blocks.*attn=1.01'. See readme for examples.",
+            default="double_blocks.*attn=1.01",
         ),
-        image: Path = Input(
-            description="An input image",
-            default=None,
+        aspect_ratio: str = Input(
+            description="Aspect ratio for the generated image in text-to-image mode. The size will always be 1 megapixel, i.e. 1024x1024 if aspect ratio is 1:1.",
+            choices=list(ASPECT_RATIOS.keys()),
+            default="1:1",
+        ),
+        num_outputs: int = Input(
+            description="Number of images to output.",
+            ge=1,
+            le=4,
+            default=1,
+        ),
+        num_inference_steps: int = Input(
+            description="Number of inference steps. More steps can give more detailed images, but take longer.",
+            ge=1,
+            le=50,
+            default=28,
+        ),
+        guidance_scale: float = Input(
+            description="Guidance scale for the diffusion process. Lower values can give more realistic images. Good values to try are 2, 2.5, 3 and 3.5",
+            ge=0,
+            le=10,
+            default=3,
+        ),
+        max_shift: float = Input(
+            description="Maximum shift",
+            ge=0,
+            le=10,
+            default=1.15,
+        ),
+        base_shift: float = Input(
+            description="Base shift",
+            ge=0,
+            le=10,
+            default=0.5,
         ),
         output_format: str = optimise_images.predict_output_format(),
         output_quality: int = optimise_images.predict_output_quality(),
@@ -83,14 +127,8 @@ class Predictor(BasePredictor):
     ) -> List[Path]:
         """Run a single prediction on the model"""
         self.comfyUI.cleanup(ALL_DIRECTORIES)
-
-        # Make sure to set the seeds in your workflow
+        self.comfyUI.connect()
         seed = seed_helper.generate(seed)
-
-        image_filename = None
-        if image:
-            image_filename = self.filename_with_extension(image, "image")
-            self.handle_input_file(image, image_filename)
 
         with open(api_json_file, "r") as file:
             workflow = json.loads(file.read())
@@ -98,14 +136,17 @@ class Predictor(BasePredictor):
         self.update_workflow(
             workflow,
             prompt=prompt,
-            negative_prompt=negative_prompt,
-            image_filename=image_filename,
+            flux_layers_to_patch=flux_layers_to_patch,
+            aspect_ratio=aspect_ratio,
+            num_outputs=num_outputs,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            max_shift=max_shift,
+            base_shift=base_shift,
             seed=seed,
         )
 
-        wf = self.comfyUI.load_workflow(workflow)
-        self.comfyUI.connect()
-        self.comfyUI.run_workflow(wf)
+        self.comfyUI.run_workflow(workflow)
 
         return optimise_images.optimise_image_files(
             output_format, output_quality, self.comfyUI.get_files(OUTPUT_DIR)
