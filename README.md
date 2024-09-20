@@ -4,6 +4,11 @@ A Replicate model for exploring the effects of patching different layers of Flux
 
 https://replicate.com/fofr/flux-dev-layers
 
+This model uses:
+
+- ComfyUI (checkout the workflow_api.json for the workflow)
+- The blocks buster node for patching layers from the [ComfyUI_essentials](https://github.com/cubiq/ComfyUI_essentials) custom nodes, by [cubiq](https://github.com/cubiq)
+
 ## Examples
 
 ```
