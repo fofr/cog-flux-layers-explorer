@@ -36,4 +36,5 @@ SCHEDULERS = [
     "sgm_uniform",
     "simple",
     "ddim_uniform",
+    "beta",
 ]
