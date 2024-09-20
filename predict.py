@@ -9,6 +9,7 @@ from cog import BasePredictor, Input, Path
 from comfyui import ComfyUI
 from cog_model_helpers import optimise_images
 from cog_model_helpers import seed as seed_helper
+from comfyui_enums import SAMPLERS, SCHEDULERS
 
 OUTPUT_DIR = "/tmp/outputs"
 INPUT_DIR = "/tmp/inputs"
@@ -72,7 +73,11 @@ class Predictor(BasePredictor):
         shift["max_shift"] = kwargs["max_shift"]
         shift["base_shift"] = kwargs["base_shift"]
 
-        workflow["17"]["inputs"]["steps"] = kwargs["num_inference_steps"]
+        basic_scheduler = workflow["17"]["inputs"]
+        basic_scheduler["scheduler"] = kwargs["scheduler"]
+        basic_scheduler["steps"] = kwargs["num_inference_steps"]
+
+        workflow["16"]["inputs"]["sampler_name"] = kwargs["sampler"]
         workflow["25"]["inputs"]["noise_seed"] = kwargs["seed"]
         workflow["60"]["inputs"]["guidance"] = kwargs["guidance_scale"]
         workflow["99"]["inputs"]["blocks"] = kwargs["flux_layers_to_patch"]
@@ -83,8 +88,8 @@ class Predictor(BasePredictor):
             description="Prompt for generated image. If you include the `trigger_word` used in the training process you are more likely to activate the trained object, style, or concept in the resulting image."
         ),
         flux_layers_to_patch: str = Input(
-            description="Flux Dev layers to patch. A new line separated list of layers with values or a regular expression matching multiple layers, for example: 'double_blocks.0.img_mod.lin.weight=1.01' or 'double_blocks.*attn=1.01'. See readme for examples.",
-            default="double_blocks.*attn=1.01",
+            description="Flux Dev layers to patch. A new line separated list of layers with values or a regular expression matching multiple layers, for example: 'double_blocks.0.img_mod.lin.weight=1.01' or 'attn=1.01'. See readme for examples.",
+            default="",
         ),
         aspect_ratio: str = Input(
             description="Aspect ratio for the generated image in text-to-image mode. The size will always be 1 megapixel, i.e. 1024x1024 if aspect ratio is 1:1.",
@@ -121,6 +126,16 @@ class Predictor(BasePredictor):
             le=10,
             default=0.5,
         ),
+        sampler: str = Input(
+            description="Sampler",
+            choices=SAMPLERS,
+            default="euler",
+        ),
+        scheduler: str = Input(
+            description="Scheduler",
+            choices=SCHEDULERS,
+            default="simple",
+        ),
         output_format: str = optimise_images.predict_output_format(),
         output_quality: int = optimise_images.predict_output_quality(),
         seed: int = seed_helper.predict_seed(),
@@ -144,6 +159,8 @@ class Predictor(BasePredictor):
             max_shift=max_shift,
             base_shift=base_shift,
             seed=seed,
+            sampler=sampler,
+            scheduler=scheduler,
         )
 
         self.comfyUI.run_workflow(workflow)
